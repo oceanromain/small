@@ -80,17 +80,36 @@ class DNSAddress {
 		} else
 			this.rawparams = '';
 		this.params = new URLSearchParams(this.rawparams);
+		// disable-qtypes
+		// https://dns.google/dns-query#GLOBAL&disable-qtype-1=true&disable-qtype-28=true&disable-qtype-33=true&disable-qtype-65=true
+		let qtypes = [...this.params.keys()].filter(e => e.match(/^disable-qtype-\d+$/)).map(e => e.replace('disable-qtype-', ''))
+		if (!hm.isEmpty(qtypes))
+			this.params.set('disable-qtypes', qtypes);
 	}
 
 	parseParam(param) {
-		return this.params.has(param) ? decodeURI(this.params.get(param)) : null;
+		switch (param) {
+			case 'disable-qtypes': // https://github.com/miekg/dns/blob/master/types.go#L26
+				return this.params.has(param) ? this.params.get(param).split(',') : [];
+			default:
+				return this.params.has(param) ? decodeURI(this.params.get(param)) : null;
+		}
 	}
 
 	setParam(param, value) {
-		if (value) {
-			this.params.set(param, value);
-		} else
-			this.params.delete(param);
+		switch (param) {
+			case 'disable-qtypes':
+				if (!hm.isEmpty(value))
+					this.params.set(param, value);
+				else
+					this.params.delete(param);
+				break;
+			default:
+				if (value)
+					this.params.set(param, value);
+				else
+					this.params.delete(param);
+		}
 
 		return this
 	}
@@ -99,8 +118,11 @@ class DNSAddress {
 		return this.addr + (this.params.size === 0 ? '' : '#' +
 			['detour', 'h3', 'skip-cert-verify', 'ecs', 'ecs-override', 'disable-ipv4', 'disable-ipv6'].map((k) => {
 				return this.params.has(k) ? '%s=%s'.format(k, encodeURI(this.params.get(k))) : null;
-			}).filter(v => v).join('&')
-		);
+			}).filter(v => v).join('&') +
+			(function(k) {
+				return this.params.has(k) ? '&' + this.params.get(k).split(',').map(v => `disable-qtype-${v}=true`).join('&') : '';
+			}.bind(this, 'disable-qtypes')())
+		).replace('#&', '#');
 	}
 }
 
@@ -234,7 +256,7 @@ const parseDNSYaml = hm.parseYaml.extend({
 		if (detour)
 			addr.setParam('detour', hm.preset_outbound.full.map(([key, label]) => key).includes(detour) ? detour : this.calcID(hm.glossary["proxy_group"].field, detour));
 
-		// key mapping // 2025/12/01
+		// key mapping // 2026/01/17
 		let config = {
 			id: this.id,
 			label: this.label,
@@ -266,7 +288,7 @@ const parseDNSPolicyYaml = hm.parseYaml.extend({
 				break;
 		}
 
-		// key mapping // 2025/12/01
+		// key mapping // 2026/01/17
 		let config = {
 			id: this.id,
 			label: this.label,
@@ -282,12 +304,12 @@ const parseDNSPolicyYaml = hm.parseYaml.extend({
 
 const parseRulesYaml = hm.parseYaml.extend({
 	key_mapping(cfg) {
-		let entry = this.parseRules(cfg); // 2025/07/11
+		let entry = this.parseRules(cfg);
 
 		if (!entry)
 			return null;
 
-		// key mapping // 2025/07/11
+		// key mapping // 2026/01/18
 		let config = {
 			id: this.id,
 			label: '%s %s'.format(this.id.slice(0,7), _('(Imported)')),
@@ -297,52 +319,76 @@ const parseRulesYaml = hm.parseYaml.extend({
 		return config;
 	},
 
-	parseRules(rule) {
+	ParseRulePayload(ruleRaw, needTarget) {
 		// parse rules
-		// https://github.com/muink/mihomo/blob/8e6eb70e714d44f26ba407adbd7b255762f48b97/config/config.go#L1040-L1090
-		// https://github.com/muink/mihomo/blob/8e6eb70e714d44f26ba407adbd7b255762f48b97/rules/parser.go#L12
-		rule = rule.split(',');
-		let ruleName = rule[0].toUpperCase(),
-			logical_payload,
+		// https://github.com/muink/mihomo/blob/300eb8b12a75504c4bd4a6037d2f6503fd3b347f/rules/common/base.go#L48-L76
+		let item = ruleRaw.split(",");
+		let tp = item[0].toUpperCase(),
 			payload,
 			target,
-			params = [],
-			subrule;
+			params = [];
 
-		let l = rule.length;
+		if (item.length > 1) {
+			switch (tp) {
+				case "MATCH":
+					// MATCH doesn't contain payload and params
+					target = item[1];
+					break;
+				case "NOT":
+				case "OR":
+				case "AND":
+				case "SUB-RULE":
+				case "DOMAIN-REGEX":
+				case "PROCESS-NAME-REGEX":
+				case "PROCESS-PATH-REGEX":
+					// some type of rules that has comma in payload and don't need params
+					if (needTarget)
+						target = item.pop(); // don't have params so target must at the end of slices
+					payload = item.slice(1).join(",");
+					break;
+				default:
+					payload = item[1];
+					if (item.length > 2) {
+						if (needTarget) {
+							target = item[2];
+							if (item.length > 3)
+								params = item.slice(3);
+						} else
+							params = item.slice(2);
+					}
+			}
+		}
 
-		if (ruleName === 'SUB-RULE') {
-			subrule = rule.slice(1).join(',').match(/^\((.*)\)/); // SUB-RULE,(payload),subrule
-			if (subrule) {
-				[rule, subrule] = [subrule[1].split(',').concat('DIRECT'), rule.pop()];
-				ruleName = rule[0].toUpperCase();
-				l = rule.length;
-			} else
+		return [ tp, payload, target, params ];
+	},
+
+	ParseRule(tp, payload, target, params) {
+		// parse rules
+		// https://github.com/muink/mihomo/blob/487de9b5482d838acc33b067045a0dc293e35d40/rules/parser.go#L12
+
+		// nested ParseRule
+		let logical_payload, subrule;
+
+		if (tp === 'SUB-RULE') {
+			payload = payload.match(/^\((.*)\)$/); // SUB-RULE,(payload),subrule
+			if (payload)
+				[tp, payload, target, params, subrule] = [...this.ParseRulePayload(payload[1], false), target];
+			else
 				return null;
 		}
 
-		if (hm.rules_logical_type.map(o => o[0]).includes(ruleName)) {
-			target = rule.pop();
-			logical_payload = rule.slice(1).join(',').match(/^\(\((.*)\)\)$/); // LOGIC_TYPE,((payload1),(payload2))
+		if (hm.rules_logical_type.map(e => e[0] || e).includes(tp)) {
+			logical_payload = payload.match(/^\(\((.*)\)\)$/); // LOGIC_TYPE,((payload1),(payload2),(payload3)),DIRECT
 			if (logical_payload)
 				logical_payload = logical_payload[1].split('),(');
 			else
 				return null;
-		} else if (hm.rules_type.map(o => o[0]).includes(ruleName)) {
-			if (l < 2) return null; // error: format invalid
-			else if (ruleName === 'MATCH') l = 2;
-			else if (l >= 3) {
-				l = 3;
-				payload = rule[1];
-			}
-			target = rule[l-1];
-			params = rule.slice(l);
-		} else
-			return null;
+		}
 
 		// make entry
 		let entry = new RulesEntry();
-		entry.type = ruleName;
+		entry.type = tp;
+
 		// parse payload
 		if (logical_payload)
 			for (let i=0; i < logical_payload.length; i++) {
@@ -361,17 +407,33 @@ const parseRulesYaml = hm.parseYaml.extend({
 				entry.setPayload(i, {type: type.toUpperCase(), factor: factor, deny: deny ? true : null});
 			}
 		else if (payload)
-			if (ruleName === 'RULE-SET')
+			if (tp === 'RULE-SET')
 				entry.setPayload(0, {factor: this.calcID(hm.glossary["ruleset"].field, payload)});
 			else
 				entry.setPayload(0, {factor: payload});
-		params.forEach((param) => entry.setParam(param, true));
+
+		// parse target/subrule
 		if (subrule)
 			entry.subrule = subrule;
 		else
 			entry.detour = hm.preset_outbound.full.map(([key, label]) => key).includes(target) ? target : this.calcID(hm.glossary["proxy_group"].field, target);
 
-		return entry.toString('json');
+		// parse params
+		params.forEach((param) => entry.setParam(param, true));
+
+		return entry;
+	},
+
+	parseRules(line) {
+		// parse rules
+		// https://github.com/muink/mihomo/blob/300eb8b12a75504c4bd4a6037d2f6503fd3b347f/config/config.go#L1038-L1062
+		let [tp, payload, target, params] = this.ParseRulePayload(line, true);
+		if (!target)
+			return null; // error: format invalid
+
+		let parsed = this.ParseRule(tp, payload, target, params);
+
+		return parsed.toString('json');
 	}
 });
 const parseSubrulesYaml = parseRulesYaml.extend({
@@ -381,7 +443,7 @@ const parseSubrulesYaml = parseRulesYaml.extend({
 		if (!cfg)
 			return null;
 
-		let config = new parseRulesYaml(this.field, this.name, cfg[2]).output();
+		let config = new parseRulesYaml(this.field, this.name, cfg[2]).output(); // 2024/08/05
 
 		return config ? Object.assign(config, {group: cfg[1]}) : null;
 	}
@@ -511,7 +573,7 @@ function renderPayload(s, total, uciconfig) {
 			o.depends({type: /\b(CIDR|CIDR6)\b/});
 			o.depends({type: /\bIP-SUFFIX\b/});
 		}
-		o.depends(Object.fromEntries([[prefix + 'type', /\b(CIDR|CIDR6)\b/]]));
+		o.depends(Object.fromEntries([[prefix + 'type', /\bCIDR6?\b/]]));
 		o.depends(Object.fromEntries([[prefix + 'type', /\bIP-SUFFIX\b/]]));
 		initPayload(o, n, 'factor', uciconfig);
 
@@ -531,7 +593,7 @@ function renderPayload(s, total, uciconfig) {
 		initPayload(o, n, 'factor', uciconfig);
 
 		o = s.option(form.Value, prefix + 'dscp', _('Factor') + ` ${n+1}`);
-		o.datatype = 'range(0, 63)';
+		o.datatype = 'and(uinteger, range(0, 63))';
 		if (n === 0)
 			o.depends('type', 'DSCP');
 		o.depends(prefix + 'type', 'DSCP');
@@ -682,9 +744,7 @@ function renderRules(s, uciconfig) {
 	}
 	o.validate = function(section_id, value) {
 		// params only available for types other than
-		// https://github.com/muink/mihomo/blob/8e6eb70e714d44f26ba407adbd7b255762f48b97/config/config.go#L1050
-		// https://github.com/muink/mihomo/blob/8e6eb70e714d44f26ba407adbd7b255762f48b97/rules/parser.go#L12
-		if (['GEOIP', 'IP-ASN', 'IP-CIDR', 'IP-CIDR6', 'IP-SUFFIX', 'RULE-SET'].includes(value)) {
+		if (hm.rules_type_allowparms.includes(value)) {
 			['no-resolve', 'src'].forEach((opt) => {
 				let UIEl = this.section.getUIElement(section_id, opt);
 				UIEl.node.querySelector('input').removeAttribute('disabled');
@@ -774,6 +834,58 @@ function renderRules(s, uciconfig) {
 	o.write = function() {};
 	o.depends('SUB-RULE', '');
 	o.modalonly = true;
+}
+
+function renderPolicies(s, uciconfig) {
+	let o;
+
+	o = s.option(form.ListValue, 'type', _('Type'));
+	o.value('domain', _('Domain'));
+	o.value('geosite', _('Geosite'));
+	o.value('rule_set', _('Rule set'));
+	o.default = 'domain';
+
+	o = s.option(form.DynamicList, 'domain', _('Domain'),
+		_('Match domain. Support wildcards.'));
+	o.depends('type', 'domain');
+	o.modalonly = true;
+
+	o = s.option(form.DynamicList, 'geosite', _('Geosite'),
+		_('Match geosite.'));
+	o.depends('type', 'geosite');
+	o.modalonly = true;
+
+	o = s.option(form.MultiValue, 'rule_set', _('Rule set'),
+		_('Match rule set.'));
+	o.value('', _('-- Please choose --'));
+	o.load = L.bind(hm.loadRulesetLabel, o, [['', _('-- Please choose --')]], ['domain', 'classical']);
+	o.depends('type', 'rule_set');
+	o.modalonly = true;
+
+	o = s.option(form.DummyValue, '_entry', _('Entry'));
+	o.load = function(section_id) {
+		const option = uci.get(uciconfig, section_id, 'type');
+
+		return uci.get(uciconfig, section_id, option)?.join(',');
+	}
+	o.modalonly = false;
+
+	o = s.option(form.MultiValue, 'server', _('DNS server'));
+	o.value('default-dns');
+	o.default = 'default-dns';
+	o.load = loadDNSServerLabel;
+	o.validate = validateNameserver;
+	o.rmempty = false;
+	o.editable = true;
+
+	o = s.option(hm.ListValue, 'proxy', _('Proxy group override'),
+		_('Override the Proxy group of DNS server.'));
+	o.default = hm.preset_outbound.direct[0][0];
+	hm.preset_outbound.direct.forEach((res) => {
+		o.value.apply(o, res);
+	})
+	o.load = L.bind(hm.loadProxyGroupLabel, o, hm.preset_outbound.direct);
+	o.editable = true;
 }
 
 return view.extend({
@@ -1090,16 +1202,29 @@ return view.extend({
 					.format(field));
 			o.placeholder = 'rules:\n' +
 							'- DOMAIN,ad.com,REJECT\n' +
+							'- DOMAIN-WILDCARD,*.google.com,auto\n' +
 							'- DOMAIN-REGEX,^abc.*com,auto\n' +
-							'- GEOSITE,youtube,PROXY\n' +
+							'- GEOSITE,youtube,GLOBAL\n' +
 							'- IP-CIDR,127.0.0.0/8,DIRECT,no-resolve\n' +
+							'- IP-CIDR6,2620:0:2d0:200::7/32,auto\n' +
 							'- IP-SUFFIX,8.8.8.8/24,auto\n' +
 							'- IP-ASN,13335,DIRECT\n' +
 							'- GEOIP,CN,DIRECT\n' +
+							'- SRC-GEOIP,cn,DIRECT\n' +
+							'- SRC-IP-ASN,9808,DIRECT\n' +
+							'- SRC-IP-CIDR,192.168.1.201/32,DIRECT\n' +
+							'- SRC-IP-SUFFIX,192.168.1.201/8,DIRECT\n' +
+							'- DST-PORT,80,DIRECT\n' +
+							'- SRC-PORT,7777,DIRECT\n' +
 							'- PROCESS-PATH,/usr/bin/wget,auto\n' +
+							'- PROCESS-PATH-WILDCARD,/usr/*/wget,GLOBAL\n' +
 							'- PROCESS-PATH-REGEX,.*bin/wget,auto\n' +
+							'- PROCESS-PATH-REGEX,(?i).*Application\\\\chrome.*,GLOBAL\n' +
 							'- PROCESS-NAME,curl,auto\n' +
+							'- PROCESS-NAME-WILDCARD,*telegram*,GLOBAL\n' +
 							'- PROCESS-NAME-REGEX,curl$,auto\n' +
+							'- PROCESS-NAME-REGEX,(?i)Telegram,GLOBAL\n' +
+							'- PROCESS-NAME-REGEX,.*telegram.*,GLOBAL\n' +
 							'- UID,1001,DIRECT\n' +
 							'- NETWORK,udp,DIRECT\n' +
 							'- DSCP,4,DIRECT\n' +
@@ -1339,8 +1464,10 @@ return view.extend({
 							'    - tls://1.1.1.1\n' +
 							'  proxy-server-nameserver:\n' +
 							'    - https://doh.pub/dns-query\n' +
+							'  proxy-server-nameserver-policy:\n' +
+							"    'www.yournode.com': '223.5.5.5'\n" +
 							'  ...'
-			o.overridecommand = '.dns | pick(["default-nameserver", "proxy-server-nameserver", "nameserver", "fallback", "nameserver-policy"]) | with(.["nameserver-policy"]; . = [.[]] | flatten) | [.[][]] | unique'
+			o.overridecommand = '.dns | pick(["default-nameserver", "proxy-server-nameserver", "nameserver", "fallback", "nameserver-policy", "proxy-server-nameserver-policy"]) | with(.["nameserver-policy"]; . = [.[]] | flatten) | with(.["proxy-server-nameserver-policy"]; . = [.[]] | flatten) | [.[][]] | unique'
 			o.parseYaml = parseDNSYaml;
 
 			return o.render();
@@ -1499,7 +1626,7 @@ return view.extend({
 		so.depends({'ecs': /.+/});
 		so.modalonly = true;
 
-		so = ss.option(form.Flag, 'disable-ipv4', _('Discard A responses'));
+		so = ss.option(form.Flag, 'disable-ipv4', _('Filter record: %s').format('A'));
 		so.default = so.disabled;
 		so.load = function(section_id) {
 			return boolToFlag(new DNSAddress(uci.get(data[0], section_id, 'address')).parseParam('disable-ipv4') ? true : false);
@@ -1515,7 +1642,7 @@ return view.extend({
 		so.write = function() {};
 		so.modalonly = true;
 
-		so = ss.option(form.Flag, 'disable-ipv6', _('Discard AAAA responses'));
+		so = ss.option(form.Flag, 'disable-ipv6', _('Filter record: %s').format('AAAA'));
 		so.default = so.disabled;
 		so.load = function(section_id) {
 			return boolToFlag(new DNSAddress(uci.get(data[0], section_id, 'address')).parseParam('disable-ipv6') ? true : false);
@@ -1530,7 +1657,76 @@ return view.extend({
 		}
 		so.write = function() {};
 		so.modalonly = true;
+
+		so = ss.option(form.DynamicList, 'disable-qtypes', _('Filter record type:'));
+		so.datatype = 'uinteger';
+		so.placeholder = '65';
+		so.load = function(section_id) {
+			return new DNSAddress(uci.get(data[0], section_id, 'address')).parseParam('disable-qtypes');
+		}
+		so.onchange = function(ev, section_id, value) {
+			let UIEl = this.section.getUIElement(section_id, 'address');
+
+			let newvalue = new DNSAddress(UIEl.getValue()).setParam('disable-qtypes', value).toString();
+
+			UIEl.node.previousSibling.innerText = newvalue;
+			UIEl.setValue(newvalue);
+		}
+		so.write = function() {};
+		so.modalonly = true;
 		/* DNS server END */
+
+		/* Bootstrap DNS policy (Node) START */
+		s.tab('dns_node_policy', _('Bootstrap DNS policy (Node)'));
+
+		/* Bootstrap DNS policy (Node) */
+		o = s.taboption('dns_node_policy', form.SectionValue, '_dns_node_policy', hm.GridSection, 'dns_node_policy', null);
+		ss = o.subsection;
+		ss.addremove = true;
+		ss.rowcolors = true;
+		ss.sortable = true;
+		ss.nodescriptions = true;
+		ss.hm_modaltitle = [ _('Bootstrap DNS policy (Node)'), _('Add a Bootstrap DNS policy (Node)') ];
+		ss.hm_prefmt = hm.glossary[ss.sectiontype].prefmt;
+		ss.hm_field  = hm.glossary[ss.sectiontype].field;
+		ss.hm_lowcase_only = false;
+		/* Import mihomo config start */
+		ss.handleYamlImport = function() {
+			const field = this.hm_field;
+			const o = new hm.HandleImport(this.map, this, _('Import mihomo config'),
+				_('Please type <code>%s</code> fields of mihomo config.</br>')
+					.format(field));
+			o.placeholder = 'proxy-server-nameserver-policy:\n' +
+							"  'www.yournode.com': '223.5.5.5'\n" +
+							'  ...'
+			o.parseYaml = parseDNSPolicyYaml;
+
+			return o.render();
+		}
+		ss.renderSectionAdd = function(/* ... */) {
+			let el = hm.GridSection.prototype.renderSectionAdd.apply(this, arguments);
+
+			el.appendChild(E('button', {
+				'class': 'cbi-button cbi-button-add',
+				'title': _('mihomo config'),
+				'click': ui.createHandlerFn(this, 'handleYamlImport')
+			}, [ _('Import mihomo config') ]));
+
+			return el;
+		}
+		/* Import mihomo config end */
+
+		so = ss.option(form.Value, 'label', _('Label'));
+		so.load = hm.loadDefaultLabel;
+		so.validate = hm.validateUniqueValue;
+		so.modalonly = true;
+
+		so = ss.option(form.Flag, 'enabled', _('Enable'));
+		so.default = so.enabled;
+		so.editable = true;
+
+		renderPolicies(ss, data[0]);
+		/* Bootstrap DNS policy (Node) END */
 
 		/* DNS policy START */
 		s.tab('dns_policy', _('DNS policy'));
@@ -1591,53 +1787,7 @@ return view.extend({
 			], ...arguments);
 		}
 
-		so = ss.option(form.ListValue, 'type', _('Type'));
-		so.value('domain', _('Domain'));
-		so.value('geosite', _('Geosite'));
-		so.value('rule_set', _('Rule set'));
-		so.default = 'domain';
-
-		so = ss.option(form.DynamicList, 'domain', _('Domain'),
-			_('Match domain. Support wildcards.'));
-		so.depends('type', 'domain');
-		so.modalonly = true;
-
-		so = ss.option(form.DynamicList, 'geosite', _('Geosite'),
-			_('Match geosite.'));
-		so.depends('type', 'geosite');
-		so.modalonly = true;
-
-		so = ss.option(form.MultiValue, 'rule_set', _('Rule set'),
-			_('Match rule set.'));
-		so.value('', _('-- Please choose --'));
-		so.load = L.bind(hm.loadRulesetLabel, so, [['', _('-- Please choose --')]], ['domain', 'classical']);
-		so.depends('type', 'rule_set');
-		so.modalonly = true;
-
-		so = ss.option(form.DummyValue, '_entry', _('Entry'));
-		so.load = function(section_id) {
-			const option = uci.get(data[0], section_id, 'type');
-
-			return uci.get(data[0], section_id, option)?.join(',');
-		}
-		so.modalonly = false;
-
-		so = ss.option(form.MultiValue, 'server', _('DNS server'));
-		so.value('default-dns');
-		so.default = 'default-dns';
-		so.load = loadDNSServerLabel;
-		so.validate = validateNameserver;
-		so.rmempty = false;
-		so.editable = true;
-
-		so = ss.option(hm.ListValue, 'proxy', _('Proxy group override'),
-			_('Override the Proxy group of DNS server.'));
-		so.default = hm.preset_outbound.direct[0][0];
-		hm.preset_outbound.direct.forEach((res) => {
-			so.value.apply(so, res);
-		})
-		so.load = L.bind(hm.loadProxyGroupLabel, so, hm.preset_outbound.direct);
-		so.editable = true;
+		renderPolicies(ss, data[0]);
 		/* DNS policy END */
 
 		/* Fallback filter START */

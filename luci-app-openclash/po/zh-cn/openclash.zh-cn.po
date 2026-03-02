@@ -3201,9 +3201,6 @@ msgstr "结果获取失败！"
 msgid "Client Fingerprint"
 msgstr "客户端指纹"
 
-msgid "Change The Client Fingerprint, Only Support TLS Transport in TCP/GRPC/WS/HTTP For Vless/Vmess and Trojan"
-msgstr "自动修改客户端 TLS 指纹，目前仅支持 Vless/Vmess(TCP/GRPC/WS/HTTP) 和 Trojan"
-
 msgid "Watchdog: Edit Client-fingerprint Failed,"
 msgstr "守护程序：修改 Client-fingerprint 失败，"
 
@@ -3405,8 +3402,8 @@ msgstr "ECS 区域地址覆盖"
 msgid "Override the ECS Subnet Address"
 msgstr "强制覆盖 DNS 查询的子网区域地址"
 
-msgid "Tip: Respect-rules Option Need Proxy-server-nameserver Option Must Be Setted, Auto Set to"
-msgstr "提示：使用 Respect-rules 功能时 Proxy-server-nameserver 必须配置，插件将默认将其设置为"
+msgid "Need Proxy-server-nameserver Option Must Be Setted, Auto Set to"
+msgstr "启用时 Proxy-server-nameserver 必须配置，插件将默认将其设置为"
 
 msgid "Tip: Nameserver Option Maybe All Setted The Proxy Option, Auto Set Proxy-server-nameserver Option to"
 msgstr "提示：Nameserver 选项可能全部设置了代理选项，插件已自动设置 Proxy-server-nameserver 选项为"
@@ -3708,11 +3705,20 @@ msgstr "取消"
 msgid "Add Config"
 msgstr "添加配置"
 
+msgid "Edit Config"
+msgstr "编辑配置"
+
+msgid "Edit Subscription"
+msgstr "编辑订阅"
+
 msgid "Ready to upload file"
 msgstr "准备上传文件"
 
 msgid "Ready to add subscription"
 msgstr "准备添加订阅"
+
+msgid "Ready to edit subscription"
+msgstr "准备编辑订阅"
 
 msgid "File selected:"
 msgstr "已选择文件："
@@ -3762,14 +3768,26 @@ msgstr "配置名称包含无效字符"
 msgid "Adding subscription..."
 msgstr "添加订阅中..."
 
+msgid "Updating subscription..."
+msgstr "修改订阅中..."
+
 msgid "Failed to download subscription config"
 msgstr "订阅配置下载失败"
 
 msgid "Failed to add subscription"
 msgstr "添加订阅失败"
 
+msgid "Failed to update subscription"
+msgstr "修改订阅失败"
+
 msgid "Subscription added successfully"
 msgstr "订阅添加成功"
+
+msgid "Subscription updated successfully"
+msgstr "订阅修改成功"
+
+msgid "Failed to get subscribe data"
+msgstr "获取订阅信息失败"
 
 msgid "Process failed"
 msgstr "处理失败"
@@ -3923,9 +3941,6 @@ msgstr "重启内核失败"
 
 msgid "Invalid config file selected"
 msgstr "选择的配置文件无效"
-
-msgid "Config uploader not ready, please try again"
-msgstr "配置上传未就绪，请重试"
 
 msgid "Config editor not ready, please try again"
 msgstr "配置编辑未就绪，请重试"
@@ -4208,3 +4223,21 @@ msgstr "暗色主题"
 
 msgid "Auto Theme"
 msgstr "自适应主题"
+
+msgid "Set Subscription Info URL"
+msgstr "设置订阅信息来源地址"
+
+msgid "Enter URLs, one per line, use #name=example end for specifing display name"
+msgstr "输入订阅信息来源地址，多个地址请每行一个，在最后可以使用 #name=example 指定名字"
+
+msgid "Set to Default"
+msgstr "设为默认"
+
+msgid "Are you sure you want to delete this panel?"
+msgstr "确定要删除此面板吗？"
+
+msgid "Default"
+msgstr "默认"
+
+msgid "Disable-Qtype"
+msgstr "禁用 Qtype"

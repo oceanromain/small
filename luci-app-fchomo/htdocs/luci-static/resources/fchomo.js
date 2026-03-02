@@ -43,6 +43,15 @@ const checkurls = [
 	['https://www.youtube.com', _('YouTube')]
 ];
 
+// allowed_congestion    '/proc/sys/net/ipv4/tcp_allowed_congestion_control'
+// available_congestion  '/proc/sys/net/ipv4/tcp_available_congestion_control'
+const congestion_controller = [
+	['', _('Keep default')],
+	['cubic', _('cubic')],
+	['new_reno', _('new_reno')],
+	['bbr', _('bbr')],
+];
+
 const stunserver = [
 	['stun.fitauto.ru:3478'],
 	['stun.hot-chilli.net:3478'],
@@ -94,6 +103,10 @@ const glossary = {
 	dns_policy: {
 		prefmt: '%s_domain',
 		field: 'nameserver-policy',
+	},
+	dns_node_policy: {
+		prefmt: '%s_nodedomain',
+		field: 'proxy-server-nameserver-policy',
 	},
 	node: {
 		prefmt: 'node_%s',
@@ -169,6 +182,7 @@ const outbound_type = [
 	//['hysteria', _('Hysteria') + ' - ' + _('UDP')],
 	['hysteria2', _('Hysteria2') + ' - ' + _('UDP')],
 	['tuic', _('TUIC') + ' - ' + _('UDP')],
+	['masque', _('Masque') + ' - ' + _('UDP')], // https://blog.cloudflare.com/post-quantum-warp/
 	['wireguard', _('WireGuard') + ' - ' + _('UDP')],
 	['ssh', _('SSH') + ' - ' + _('TCP')]
 ];
@@ -206,12 +220,12 @@ const routing_port_type = [
 	['all', _('All ports')],
 	['common_tcpport', _('Common ports (bypass P2P traffic)'), uci.get('fchomo', 'config', 'common_tcpport') || '20-21,22,53,80,110,143,443,853,873,993,995,5222,8080,8443,9418'],
 	['common_udpport', _('Common ports (bypass P2P traffic)'), uci.get('fchomo', 'config', 'common_udpport') || '20-21,22,53,80,110,143,443,853,993,995,8080,8443,9418'],
-	['smtp_tcpport', _('SMTP ports'), uci.get('fchomo', 'config', 'smtp_tcpport') || '465,587'],
-	['stun_port', _('STUN ports'), uci.get('fchomo', 'config', 'stun_port') || '3478,19302'],
-	['turn_port', _('TURN ports'), uci.get('fchomo', 'config', 'turn_port') || '5349'],
-	['google_fcm_port', _('Google FCM ports'), uci.get('fchomo', 'config', 'google_fcm_port') || '443,5228-5230'],
-	['steam_client_port', _('Steam Client ports'), uci.get('fchomo', 'config', 'steam_client_port') || '27015-27050'],
-	['steam_p2p_udpport', _('Steam P2P ports'), uci.get('fchomo', 'config', 'steam_p2p_udpport') || '3478,4379,4380,27000-27100'],
+	['smtp_tcpport', _('%s ports').format(_('SMTP')), uci.get('fchomo', 'config', 'smtp_tcpport') || '465,587'],
+	['stun_port', _('%s ports').format(_('STUN')), uci.get('fchomo', 'config', 'stun_port') || '3478,19302'],
+	['turn_port', _('%s ports').format(_('TURN')), uci.get('fchomo', 'config', 'turn_port') || '5349'],
+	['google_fcm_port', _('%s ports').format(_('Google FCM')), uci.get('fchomo', 'config', 'google_fcm_port') || '443,5228-5230'],
+	['steam_client_port', _('%s ports').format(_('Steam Client')), uci.get('fchomo', 'config', 'steam_client_port') || '27015-27050'],
+	['steam_p2p_udpport', _('%s ports').format(_('Steam P2P')), uci.get('fchomo', 'config', 'steam_p2p_udpport') || '3478,4379,4380,27000-27100'],
 ];
 
 const rules_type = [
@@ -243,8 +257,10 @@ const rules_type = [
 
 	['PROCESS-PATH'],
 	['PROCESS-PATH-REGEX'],
+	['PROCESS-PATH-WILDCARD'],
 	['PROCESS-NAME'],
 	['PROCESS-NAME-REGEX'],
+	['PROCESS-NAME-WILDCARD'],
 	['UID'],
 
 	['NETWORK'],
@@ -253,6 +269,17 @@ const rules_type = [
 	['RULE-SET'],
 
 	['MATCH']
+];
+
+const rules_type_allowparms = [
+	// params only available for types other than
+	// https://github.com/muink/mihomo/blob/300eb8b12a75504c4bd4a6037d2f6503fd3b347f/rules/parser.go#L12
+	'GEOIP',
+	'IP-ASN',
+	'IP-CIDR',
+	'IP-CIDR6',
+	'IP-SUFFIX',
+	'RULE-SET',
 ];
 
 const rules_logical_type = [
@@ -318,10 +345,11 @@ const tls_client_auth_types = [
 ];
 
 const tls_client_fingerprints = [
+	['', _('Keep default')],
 	['chrome'],
 	['firefox'],
 	['safari'],
-	['iOS'],
+	['ios'],
 	['android'],
 	['edge'],
 	['360'],
@@ -1629,6 +1657,7 @@ return baseclass.extend({
 	HM_DIR,
 	monospacefonts,
 	checkurls,
+	congestion_controller,
 	stunserver,
 	dashrepos,
 	dashrepos_urlparams,
@@ -1643,6 +1672,7 @@ return baseclass.extend({
 	proxy_group_type,
 	routing_port_type,
 	rules_type,
+	rules_type_allowparms,
 	rules_logical_type,
 	rules_logical_payload_count,
 	aead_cipher_length,
